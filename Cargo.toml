@@ -1,0 +1,20 @@
+[package]
+name = "fanotify_scanning"
+version = "0.1.0"
+edition = "2021"
+
+### <EXECUTABLES> ###
+[[bin]]
+name = "cryptor"
+path = "src/cryptor.rs"
+
+[[bin]]
+name = "scanner"
+path = "src/scanner.rs"
+### </EXECUTABLES> ###
+
+[dependencies]
+fanotify-rs = "0.2.10"
+libc = "0.2.137"
+nix = "0.25.0"
+
