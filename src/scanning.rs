@@ -2,16 +2,21 @@ pub mod scanning {
     use std::path::*;
     use std::vec::Vec;
 
+     /**
+      This structure contains a field that measures how
+      suspicious this process is and stores all file paths
+      that were modified by this process
+     */
     pub struct ProcStats {
         pub susness : i32,
-        pub operations: Vec<PathBuf>,
+        pub paths: Vec<PathBuf>,
     }
 
     impl ProcStats {
         pub fn new() -> ProcStats {
             ProcStats {
                 susness: 0,
-                operations: Vec::new(),
+                paths: Vec::new(),
             }
         }
     }
@@ -23,6 +28,15 @@ pub mod scanning {
         Far,
     }
 
+    /**
+      Max value of susness field that processes are allowed to have.
+      If this value is exceeded, the process is killed.
+     */
+    pub const CRITICAL_SUSNESS: i32 = 5; 
+
+    /**
+      Find "distance" between two absolute paths.
+     */
     pub fn distance(path1: &Path, path2: &Path) -> Distance {
         if path1.eq(path2) {
             return Distance::Zero;
