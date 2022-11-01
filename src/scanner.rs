@@ -1,7 +1,10 @@
 use std::{env, os::unix::prelude::RawFd, process, path::*, str::FromStr, fs};
+use std::collections::HashMap;
 use libc;
 use nix::{self, poll::{self, PollFlags}, errno::*};
 use fanotify::low_level::*;
+mod scanning;
+use scanning::scanning::*;
 
 /*
   For some reason the library on crates.io
@@ -29,7 +32,27 @@ fn fanotify_respond(fd: i32, resp_fd: i32, resp_response: u32) -> Result<usize, 
     nix::unistd::write(fd, &response)
 }
 
-fn handle_event(metadata: &fanotify_event_metadata, fd: i32) {
+fn decimate_mercilessly(pid: i32) {
+    // First remove the executable (at least try)
+    println!("Found malicious process, PID={}", pid);
+    let mut link_to_exe = PathBuf::from_str("/proc").unwrap();
+    link_to_exe.push(pid.to_string());
+    link_to_exe.push("exe");
+    let path_to_exe = fs::read_link(link_to_exe).unwrap(); // need to check unwrap
+    println!("Removing execulable \"{}\"...", path_to_exe.display());
+    match fs::remove_file(path_to_exe) {
+        Ok(_) => println!("Done."),
+        Err(_) =>  println!("It's invincible!"),
+    };
+    // Then kill the wrongdoer
+    println!("Killing process now...");
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGKILL) {
+        Ok(_) => println!("Done"),
+        Err(_) => println!("I can't even kill it. Why?..."),
+    }
+}
+
+fn handle_event(metadata: &fanotify_event_metadata, _fd: i32, info: &mut HashMap<i32, ProcStats>) {
     /* Check that run-time and compile-time structures match. */
     if metadata.vers != FANOTIFY_METADATA_VERSION {
         println!("Mismatch of fanotify metadata version.");
@@ -39,40 +62,46 @@ fn handle_event(metadata: &fanotify_event_metadata, fd: i32) {
     queue overflow, or a file descriptor (a nonnegative
     integer). Here, we simply ignore queue overflow. */
     if metadata.fd >= 0 {
-        /* Handle open permission event. */
-        if (metadata.mask & FAN_OPEN_PERM) != 0 {
-            print!("FAN_OPEN_PERM: ");
-            fanotify_respond(fd, metadata.fd, FAN_ALLOW)
-                .expect("Cannot write response");
+        if (metadata.mask & FAN_MODIFY) != 0 {
+            let stats = match info.get_mut(&metadata.pid) {
+                Some(val) => val,
+                None => {
+                    info.insert(metadata.pid, ProcStats::new());
+                    info.get_mut(&metadata.pid).unwrap()
+                }
+            };
+            if stats.operations.is_empty() {
+                let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
+                procfd_path.push(metadata.fd.to_string());
+                let file_name = fs::read_link(procfd_path).unwrap();
+                stats.operations.push(file_name);
+            } else {
+                let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
+                procfd_path.push(metadata.fd.to_string());
+                let path1buf = fs::read_link(procfd_path).unwrap();
+                if stats.operations.contains(&path1buf) {
+                    if stats.susness > 0 {stats.susness -= 1}
+                } else {
+                    let path2 = stats.operations.last().unwrap().as_path();
+                    match distance(path1buf.as_path(), path2) {
+                        Distance::Zero => {if stats.susness > 0 {stats.susness -= 1}},
+                        Distance::SameDir => stats.susness += 2,
+                        Distance::NeigbourDirs => stats.susness += 1,
+                        Distance::Far => ()
+                    };
+                }
+            }
+            if stats.susness > 5 {
+                decimate_mercilessly(metadata.pid);
+                info.remove(&metadata.pid);
+            }
         }
-        if (metadata.mask & FAN_OPEN_EXEC_PERM) != 0 {
-            print!("FAN_OPEN_PERM: ");
-            fanotify_respond(fd, metadata.fd, FAN_ALLOW)
-                .expect("Cannot write response");
-        }
-        /* Handle closing of writable file event. */
-        if (metadata.mask & FAN_CLOSE_WRITE) != 0 {
-            print!("FAN_CLOSE_WRITE: ");
-        }
-        /* Handle closing of nowritable file event. */
-        if (metadata.mask & FAN_CLOSE_NOWRITE) != 0 {
-            print!("FAN_CLOSE_NOWRITE: ");
-        }
-        /* Retrieve and print pathname of the accessed file. */
-        let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
-        procfd_path.push(metadata.fd.to_string());
-        let procname = match fs::read_link(procfd_path) {
-            Ok(path) => path,
-            Err(_) => std::path::PathBuf::from("[unknown file]"),
-        };
-        println!("File {} PID {}", procname.display(), metadata.pid);
-        /* Close the file descriptor of the event. */
         close_fd(metadata.fd);
     }
 
 }
 
-fn handle_events(fd: RawFd) {
+fn handle_events(fd: RawFd, info: &mut HashMap<i32, ProcStats>) {
     /* Helper functions to deal with fanotify_event_metadata buffers */
     fn fan_event_ok(meta: *const fanotify_event_metadata, len: usize) -> bool {
         let size_of_struct = std::mem::size_of::<fanotify_event_metadata>();
@@ -105,23 +134,10 @@ fn handle_events(fd: RawFd) {
         /* Point to the first event in the buffer. */
         let mut metadata = buf.as_ptr() as *const fanotify_event_metadata;
         /* Loop over all events in the buffer. */
-        /* FAN_EVENT_OK macro checks the remaining length len of the buffer
-           meta against the length of the metadata structure and the
-           event_len field of the first metadata structure in the
-           buffer.*/
         while fan_event_ok(metadata, len) {
             unsafe {
-                handle_event(&*metadata, fd);
+                handle_event(&*metadata, fd, info);
                 /* Advance to next event. */
-                /* FAN_EVENT_NEXT macro uses the length indicated in the event_len
-                field of the fanotify_event_metadata structure pointed to by metadata to
-                calculate the address of the next fanotify_event_metadata structure that
-                follows meta. len is the number of bytes of fanotify_event_metadata that
-                currently remain in the buffer. The macro returns a pointer to the next
-                fanotify_event_metadata structure that follows metadata,
-                and reduces len by the number of bytes in the fanotify_event_metadata
-                structure that has been skipped over(i.e., it subtracts
-                metadata->event_len from len). */
                 metadata = fan_event_next(&*metadata, &mut len);
             }
         }
@@ -130,8 +146,7 @@ fn handle_events(fd: RawFd) {
 
 fn main() {
     let argv: Vec<String> = env::args().collect();
-    let mut buf: Vec<u8> = Vec::new();
-    buf.resize(16, 0);
+    let mut operations_info: HashMap<i32, ProcStats> = HashMap::new();
 
     /* Check mount point is supplied. */
     if argv.len() != 2 {
@@ -150,7 +165,7 @@ fn main() {
          file descriptor. */
     fanotify_mark(fd,
         FAN_MARK_ADD | FAN_MARK_MOUNT,
-        FAN_OPEN_PERM | FAN_OPEN_EXEC_PERM | FAN_CLOSE_WRITE | FAN_CLOSE_NOWRITE,
+        FAN_MODIFY,
         AT_FDCWD,
         argv[1].as_str())
         .expect("fanotify_mark failed");
@@ -172,15 +187,11 @@ fn main() {
         };
         if poll_num > 0 {
             if fds[0].revents().unwrap_or(PollFlags::empty()).contains(PollFlags::POLLIN) {
-                /* Console input is available: empty stdin and quit. */
-                //while std::io::stdin().read(buf.as_mut()).expect("Cannot read stdin") > 0 {
-                //    continue; 
-                //}
                 break;
             }
             if fds[1].revents().unwrap_or(PollFlags::empty()).contains(PollFlags::POLLIN) {
                 /* Fanotify events are available. */
-                handle_events(fd);
+                handle_events(fd, &mut operations_info);
             }
         }
     }
