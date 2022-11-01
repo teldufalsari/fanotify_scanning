@@ -25,7 +25,8 @@ const FAN_OPEN_EXEC_PERM: u64 = 0x00040000;
 const SIZEOF_FAN_METADATA: usize = 24;
 
 
-fn fanotify_respond(fd: i32, resp_fd: i32, resp_response: u32) -> Result<usize, Errno> {
+
+fn _fanotify_respond(fd: i32, resp_fd: i32, resp_response: u32) -> Result<usize, Errno> {
     let mut response = resp_fd.to_ne_bytes().to_vec();
     let mut code = resp_response.to_ne_bytes().to_vec();
     response.append(&mut code);
@@ -52,7 +53,7 @@ fn decimate_mercilessly(pid: i32) {
     }
 }
 
-fn handle_event(metadata: &fanotify_event_metadata, _fd: i32, info: &mut HashMap<i32, ProcStats>) {
+fn handle_event(metadata: &fanotify_event_metadata, _fd: i32, proc_table: &mut HashMap<i32, ProcStats>) {
     /* Check that run-time and compile-time structures match. */
     if metadata.vers != FANOTIFY_METADATA_VERSION {
         println!("Mismatch of fanotify metadata version.");
@@ -63,37 +64,43 @@ fn handle_event(metadata: &fanotify_event_metadata, _fd: i32, info: &mut HashMap
     integer). Here, we simply ignore queue overflow. */
     if metadata.fd >= 0 {
         if (metadata.mask & FAN_MODIFY) != 0 {
-            let stats = match info.get_mut(&metadata.pid) {
+            // Retirieve write statistics for that process
+            let proc_stats = match proc_table.get_mut(&metadata.pid) {
                 Some(val) => val,
                 None => {
-                    info.insert(metadata.pid, ProcStats::new());
-                    info.get_mut(&metadata.pid).unwrap()
+                    proc_table.insert(metadata.pid, ProcStats::new());
+                    proc_table.get_mut(&metadata.pid).unwrap()
                 }
             };
-            if stats.operations.is_empty() {
+            if proc_stats.paths.is_empty() { // If it's a new process
+                // Retrieve the modified file name and add it to the paths vector
                 let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
                 procfd_path.push(metadata.fd.to_string());
                 let file_name = fs::read_link(procfd_path).unwrap();
-                stats.operations.push(file_name);
-            } else {
+                proc_stats.paths.push(file_name);
+            } else { // The process is already in the table
+                // Retirive the modified accessed file name
                 let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
                 procfd_path.push(metadata.fd.to_string());
                 let path1buf = fs::read_link(procfd_path).unwrap();
-                if stats.operations.contains(&path1buf) {
-                    if stats.susness > 0 {stats.susness -= 1}
+                if proc_stats.paths.contains(&path1buf) {
+                    // If process writes to the same file again, it's less suspicious
+                    if proc_stats.susness > 0 {proc_stats.susness -= 1}
                 } else {
-                    let path2 = stats.operations.last().unwrap().as_path();
+                    // The closer paths are, the more it's suspicious
+                    let path2 = proc_stats.paths.last().unwrap().as_path();
                     match distance(path1buf.as_path(), path2) {
-                        Distance::Zero => {if stats.susness > 0 {stats.susness -= 1}},
-                        Distance::SameDir => stats.susness += 2,
-                        Distance::NeigbourDirs => stats.susness += 1,
+                        Distance::Zero => {if proc_stats.susness > 0 {proc_stats.susness -= 1}},
+                        Distance::SameDir => proc_stats.susness += 2,
+                        Distance::NeigbourDirs => proc_stats.susness += 1,
                         Distance::Far => ()
                     };
+                    proc_stats.paths.push(path1buf);
                 }
             }
-            if stats.susness > 5 {
+            if proc_stats.susness > CRITICAL_SUSNESS {
                 decimate_mercilessly(metadata.pid);
-                info.remove(&metadata.pid);
+                proc_table.remove(&metadata.pid);
             }
         }
         close_fd(metadata.fd);
@@ -159,10 +166,6 @@ fn main() {
         FAN_CLOEXEC | FAN_CLASS_PRE_CONTENT | FAN_NONBLOCK,
         O_RDONLY | O_LARGEFILE)
         .expect("fanotify_init failed");
-    /* Mark the mount for:
-       - permission events before opening files
-       - notification events after closing a write-enabled and nowriteble 
-         file descriptor. */
     fanotify_mark(fd,
         FAN_MARK_ADD | FAN_MARK_MOUNT,
         FAN_MODIFY,
