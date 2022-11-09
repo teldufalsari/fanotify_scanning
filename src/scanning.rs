@@ -1,4 +1,5 @@
 use std::path::*;
+use std::time::{self, SystemTime};
 use std::vec::Vec;
 use std::{process, str::FromStr, fs};
 use std::os::unix::prelude::{RawFd, AsRawFd};
@@ -30,6 +31,8 @@ pub fn prepare_input(path: &str) -> nix::Result<(Fanotify, [PollFd; 2])> {
     return Ok((fanotify, fds));
 }
 
+const FLUSH_PERIOD: u32 = 64;
+const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 /// Process all fanotify events as they are available
 /// until some input from standard input is recieved.
 pub fn loop_until_input_recieved(
@@ -37,6 +40,7 @@ pub fn loop_until_input_recieved(
     mut fds: [PollFd; 2],
     mut proc_table: HashMap<Pid, ProcStats>
 ) -> nix::Result<()> {
+    let mut flush_counter = 0u32;
     loop {
         let poll_num = poll(&mut fds, -1)?;
         if poll_num > 0 {
@@ -45,7 +49,12 @@ pub fn loop_until_input_recieved(
             }
             if fds[1].revents().unwrap_or(PollFlags::empty()).contains(PollFlags::POLLIN) {
                 // Fanotify events are available.
+                flush_counter += 1;
                 handle_events(fanotify, &mut proc_table)?;
+                if flush_counter > FLUSH_PERIOD {
+                    flush(&mut proc_table, FLUSH_TIMEOUT);
+                    flush_counter = 0;
+                }
             }
         }
     }
@@ -60,6 +69,7 @@ pub fn loop_until_input_recieved(
 pub struct ProcStats {
     pub susness : i32,
     pub paths: Vec<PathBuf>,
+    pub last_update_time: time::SystemTime,
 }
 
 impl ProcStats {
@@ -68,6 +78,7 @@ impl ProcStats {
         ProcStats {
             susness: 0,
             paths: Vec::new(),
+            last_update_time: SystemTime::now(),
         }
     }
 }
@@ -232,6 +243,7 @@ fn handle_modify_event(
 
             // Save this path for future analysis
             proc_stats.paths.push(path1buf);
+            proc_stats.last_update_time = SystemTime::now();
         }
     }
     if proc_stats.susness > CRITICAL_SUSNESS {
@@ -283,4 +295,11 @@ fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats>) -
         }
     }
     Ok(())
+}
+
+fn flush(proc_table: &mut HashMap<Pid, ProcStats>, timeout: std::time::Duration) {
+    let now = SystemTime::now();
+    proc_table.retain(|_, stats| {
+        now.duration_since(stats.last_update_time).unwrap_or(time::Duration::ZERO) < timeout
+    });
 }
