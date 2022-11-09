@@ -388,8 +388,8 @@ impl Fanotify {
         flags: libc::c_uint,
         mask: EventFlags,
         dirfd: RawFd,
-        path: &P) -> Result<()>
-    {
+        path: &P
+    ) -> Result<()> {
         let res = path.with_nix_path(|cstr| {
             unsafe {
                 libc::fanotify_mark(self.fd, flags, mask.bits(), dirfd, cstr.as_ptr())
@@ -404,8 +404,8 @@ impl Fanotify {
         flags: MarkFlags,
         mask: EventFlags,
         dirfd: RawFd,
-        path: &P) -> Result<()>
-    {
+        path: &P
+    ) -> Result<()> {
         self.fanotify_mark(libc::FAN_MARK_ADD | flags.bits(), mask, dirfd, path)
     }
 
@@ -415,8 +415,8 @@ impl Fanotify {
         flags: MarkFlags,
         mask: EventFlags,
         dirfd: RawFd,
-        path: &P) -> Result<()>
-    {
+        path: &P
+    ) -> Result<()> {
         self.fanotify_mark(libc::FAN_MARK_REMOVE | flags.bits(), mask, dirfd, path)
     }
 
@@ -427,8 +427,8 @@ impl Fanotify {
         flags: MarkFlags,
         mask: EventFlags,
         dirfd: RawFd,
-        path: &P) -> Result<()>
-    {
+        path: &P
+    ) -> Result<()> {
         self.fanotify_mark(libc::FAN_MARK_FLUSH | flags.bits(), mask, dirfd, path)
     }
     
@@ -447,7 +447,6 @@ impl Fanotify {
         
         let nread = read(self.fd, &mut buffer)?;
 
-        // Careful here: you neet to implement FAN_METADATA_OK(·,·) macro
         while (nread - offset) >= metadata_size {
             let event = unsafe {
                 let mut event = MaybeUninit::<libc::fanotify_event_metadata>::uninit();
@@ -471,6 +470,9 @@ impl Fanotify {
         Ok(events)
     }
 
+    /// Write response to the underlying file descriptor
+    ///
+    /// Needed for `FAN_OPEN_PERM` and `FAN_OPEN_EXEC_PERM` events.
     pub fn respond(self, fd: RawFd, response: Response) -> Result<usize> {
         let resp_struct = libc::fanotify_response{
             fd: fd,
