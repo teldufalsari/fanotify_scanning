@@ -120,26 +120,48 @@ fn distance(path1: &Path, path2: &Path) -> Distance {
     Distance::Far
 }
 
+// This function tries to remove executable and then kill the process.
+// All open calls from the process will be blocked until it's killed.
+// The function does not return errno, instead it writes error messages
+// to stderr and stdout.
 fn kill_process(pid: Pid) {
-    // First remove the executable (at least try)
     println!("Found malicious process, PID={}", pid);
+    // First remove the executable (at least try)
     let mut link_to_exe = PathBuf::from_str("/proc").unwrap();
     link_to_exe.push(pid.to_string());
     link_to_exe.push("exe");
-    let path_to_exe = fs::read_link(link_to_exe).unwrap(); // need to check unwrap and print something like (cannot locate process executable)
-    println!("Removing execulable \"{}\"...", path_to_exe.display());
-    match fs::remove_file(path_to_exe) {
-        Ok(_) => println!("Done."),
-        Err(_) =>  println!("It's invincible!"),
-    };
+    match fs::read_link(link_to_exe.as_path()) {
+        Ok(path_to_exe) => {
+            print!("Removing execulable \"{}\"...", path_to_exe.display());
+            match fs::remove_file(path_to_exe.as_path()) {
+                Ok(_) => println!("Done."),
+                Err(code) =>  {
+                    println!("Failed.");
+                    eprintln!("Cannot remove {}: {}", path_to_exe.display(), code.to_string());
+                }
+            };
+        }
+        Err(code) => {
+            println!("Cannot locate process executable, file will not be removed.");
+            eprintln!("Cannot read link {}: {}", link_to_exe.display(), code.to_string());
+        }
+    }
     // Then kill the wrongdoer
-    println!("Killing process now...");
+    print!("Killing process now...");
     match signal::kill(pid, signal::SIGKILL) {
-        Ok(_) => println!("Done"),
-        Err(_) => println!("I can't even kill it. Why?..."),
+        Ok(_) => println!("Done."),
+        Err(code) => {
+            println!("Failed.");
+            eprintln!("Cannot send signal to process {} : {}", pid, code.to_string());
+        }
     }
 }
 
+// Send response to the process that tries to open a file
+// If process is known ans suspicious, `FAN_DENY` is sent,
+// `FAN_ALLOW` otherwise.
+// With the given approach read-only processes don't need
+// to be held in the process table.
 fn handle_open_perm(
     metadata: &FanotifyEventMetadata,
     fanotify: Fanotify,
@@ -158,6 +180,9 @@ fn handle_open_perm(
     Ok(())
 }
 
+/// Modify suspiciousness value of the already known process (see source below),
+/// or add a new process to the table.
+/// If the process is suspicious, `kill_process` is called.
 fn handle_modify_event(
     metadata: &FanotifyEventMetadata,
     proc_table: &mut HashMap<Pid, ProcStats>
@@ -175,14 +200,19 @@ fn handle_modify_event(
         // file name and add it to the paths vector
         let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
         procfd_path.push(metadata.fd.to_string());
-        let file_name = fs::read_link(procfd_path).unwrap(); // Don't unwrap!!!!!!!!!!!!
+        let file_name =  fs::read_link(procfd_path)
+            .map_err(|err| { // If failed => convert the error to nix::Errno and send it back to the caller
+            Errno::from_i32(err.raw_os_error().unwrap_or_default())
+        })?;
         proc_stats.paths.push(file_name);
     } else {
         // If the process is already in the table, we need to
         // retrieve the name of the file modified
         let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
         procfd_path.push(metadata.fd.to_string());
-        let path1buf = fs::read_link(procfd_path).unwrap(); // Don't unwrap!!!!!!!!!!!!!!
+        let path1buf = fs::read_link(procfd_path).map_err(|err| {
+            Errno::from_i32(err.raw_os_error().unwrap_or_default())
+        })?;
 
         if proc_stats.paths.contains(&path1buf) {
             // If process writes to the same file again, it's less suspicious
@@ -235,7 +265,7 @@ fn handle_event(
 
 /// Read all available events from fanotify instance
 /// and handle them accordingly.
-pub fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats>) -> nix::Result<()> {
+fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats>) -> nix::Result<()> {
     // Loop while events can be read from fanotify file descriptor.
     loop {
         // Read some events.
