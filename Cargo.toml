@@ -14,7 +14,7 @@ path = "src/scanner.rs"
 ### </EXECUTABLES> ###
 
 [dependencies]
-fanotify-rs = "0.2.10"
 libc = "0.2.137"
 nix = "0.25.0"
+bitflags = "1.3"
 
