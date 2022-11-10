@@ -42,7 +42,11 @@ pub fn loop_until_input_recieved(
 ) -> nix::Result<()> {
     let mut flush_counter = 0u32;
     loop {
-        let poll_num = poll(&mut fds, -1)?;
+        let poll_num = match poll(&mut fds, -1) {
+            Err(Errno::EINTR) => continue,
+            Err(e) => return Err(e),
+            Ok(val) => val,
+        };
         if poll_num > 0 {
             if fds[0].revents().unwrap_or(PollFlags::empty()).contains(PollFlags::POLLIN) {
                 break;
@@ -144,13 +148,12 @@ fn kill_process(pid: Pid) {
     match fs::read_link(link_to_exe.as_path()) {
         Ok(path_to_exe) => {
             print!("Removing execulable \"{}\"...", path_to_exe.display());
-            match fs::remove_file(path_to_exe.as_path()) {
-                Ok(_) => println!("Done."),
-                Err(code) =>  {
-                    println!("Failed.");
-                    eprintln!("Cannot remove {}: {}", path_to_exe.display(), code.to_string());
-                }
-            };
+            if let Err(code) = fs::remove_file(path_to_exe.as_path()) {
+                println!("Failed.");
+                eprintln!("Cannot remove {}: {}", path_to_exe.display(), code.to_string());
+            } else {
+                println!(" Done.");
+            }
         }
         Err(code) => {
             println!("Cannot locate process executable, file will not be removed.");
@@ -159,12 +162,11 @@ fn kill_process(pid: Pid) {
     }
     // Then kill the wrongdoer
     print!("Killing process now...");
-    match signal::kill(pid, signal::SIGKILL) {
-        Ok(_) => println!("Done."),
-        Err(code) => {
-            println!("Failed.");
-            eprintln!("Cannot send signal to process {} : {}", pid, code.to_string());
-        }
+    if let Err(code) = signal::kill(pid, signal::SIGKILL) {
+        println!("Failed.");
+        eprintln!("Cannot send signal to process {} : {}", pid, code.to_string());
+    } else {
+        println!(" Done.");
     }
 }
 
