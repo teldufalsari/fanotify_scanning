@@ -21,7 +21,7 @@ pub fn prepare_input(path: &str) -> nix::Result<(Fanotify, [PollFd; 2])> {
         InitFlags::FAN_CLOEXEC | InitFlags::FAN_CLASS_PRE_CONTENT | InitFlags::FAN_NONBLOCK,
         OpenFlags::O_RDONLY | OpenFlags::O_LARGEFILE)?;
     fanotify.add_mark(MarkFlags::FAN_MARK_MOUNT,
-        EventFlags::FAN_MODIFY | EventFlags::FAN_OPEN_PERM | EventFlags::FAN_OPEN_EXEC_PERM,
+        EventFlags::FAN_CLOSE_WRITE | EventFlags::FAN_OPEN_PERM | EventFlags::FAN_OPEN_EXEC_PERM,
         libc::AT_FDCWD,
         path)?;
     let fds = [
@@ -269,7 +269,7 @@ fn handle_event(
         if metadata.mask.contains(EventFlags::FAN_OPEN_PERM) || metadata.mask.contains(EventFlags::FAN_OPEN_EXEC_PERM) {
             handle_open_perm(metadata, fanotify, proc_table)?;
         }
-        if metadata.mask.contains(EventFlags::FAN_MODIFY) {
+        if metadata.mask.contains(EventFlags::FAN_CLOSE_WRITE) {
             handle_modify_event(metadata, proc_table)?;
         }
         unistd::close(metadata.fd).unwrap_or_default();
