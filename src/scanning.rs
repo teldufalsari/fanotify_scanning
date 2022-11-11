@@ -135,6 +135,16 @@ fn distance(path1: &Path, path2: &Path) -> Distance {
     Distance::Far
 }
 
+// Read file name from the fanotify event file descriptor
+fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
+    let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
+    procfd_path.push(fd.to_string());
+    fs::read_link(procfd_path)
+        .map_err(|err| { // If failed => convert the error to nix::Errno and send it back to the caller
+        Errno::from_i32(err.raw_os_error().unwrap_or_default())
+    })
+}
+
 // This function tries to remove executable and then kill the process.
 // All open calls from the process will be blocked until it's killed.
 // The function does not return errno, instead it writes error messages
@@ -211,22 +221,12 @@ fn handle_modify_event(
     if proc_stats.paths.is_empty() {
         // If it's a new process, retrieve the modified
         // file name and add it to the paths vector
-        let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
-        procfd_path.push(metadata.fd.to_string());
-        let file_name =  fs::read_link(procfd_path)
-            .map_err(|err| { // If failed => convert the error to nix::Errno and send it back to the caller
-            Errno::from_i32(err.raw_os_error().unwrap_or_default())
-        })?;
+        let file_name = get_path_by_fd(metadata.fd)?;
         proc_stats.paths.push(file_name);
     } else {
         // If the process is already in the table, we need to
         // retrieve the name of the file modified
-        let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
-        procfd_path.push(metadata.fd.to_string());
-        let path1buf = fs::read_link(procfd_path).map_err(|err| {
-            Errno::from_i32(err.raw_os_error().unwrap_or_default())
-        })?;
-
+        let path1buf = get_path_by_fd(metadata.fd)?;
         if proc_stats.paths.contains(&path1buf) {
             // If process writes to the same file again, it's less suspicious
             if proc_stats.susness > 0 {proc_stats.susness -= 1}
