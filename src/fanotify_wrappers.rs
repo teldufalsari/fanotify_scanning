@@ -6,7 +6,6 @@ use nix::Result;
 use nix::NixPath;
 use bitflags::bitflags;
 use nix::errno::Errno;
-use libc;
 
 
 pub const FANOTIFY_METADATA_VERSION: u8 = 3;

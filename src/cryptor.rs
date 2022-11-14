@@ -31,13 +31,13 @@ fn encrypt_file(path: &Path, key: u8, buffer: &mut Vec<u8>) -> io::Result<()> {
         let offset = (i * buf_size) as u64;
         file.read_exact_at(buffer.as_mut_slice(), offset)?;
         xor_buffer(buffer, key);
-        file.write_all_at(buffer.as_mut_slice(), offset)?;
+        file.write_all_at(buffer.as_slice(), offset)?;
     }
     if last_rw_size > 0 {
         let offset = (full_buffer_rw_count * buf_size) as u64;
         file.read_exact_at(&mut buffer[0..last_rw_size], offset)?;
         xor_buffer(&mut buffer[0..last_rw_size], key);
-        file.write_all_at(&mut buffer[0..last_rw_size], offset)?;
+        file.write_all_at(&buffer[0..last_rw_size], offset)?;
     }
     file.sync_data()?;
     Ok(())
@@ -73,9 +73,8 @@ fn main() {
             return;
         }
     };
-    let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
-    buf.resize(BUF_SIZE, 0);
-    if let Err(err) = encrypt_dir(&path, 0x66, &mut buf) {
-        eprintln!("{} error: {}", err.kind(), err.to_string());
+    let mut buf: Vec<u8> = vec![0; BUF_SIZE];
+    if let Err(err) = encrypt_dir(path, 0x66, &mut buf) {
+        eprintln!("{} error: {}", err.kind(), err);
     }
 }
