@@ -150,28 +150,7 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
 fn kill_process(pid: Pid) {
-    println!("Found malicious process, PID={}", pid);
-    // First remove the executable (at least try)
-    let mut link_to_exe = PathBuf::from_str("/proc").unwrap();
-    link_to_exe.push(pid.to_string());
-    link_to_exe.push("exe");
-    match fs::read_link(link_to_exe.as_path()) {
-        Ok(path_to_exe) => {
-            print!("Removing execulable \"{}\"...", path_to_exe.display());
-            if let Err(code) = fs::remove_file(path_to_exe.as_path()) {
-                println!("Failed.");
-                eprintln!("Cannot remove {}: {}", path_to_exe.display(), code.to_string());
-            } else {
-                println!(" Done.");
-            }
-        }
-        Err(code) => {
-            println!("Cannot locate process executable, file will not be removed.");
-            eprintln!("Cannot read link {}: {}", link_to_exe.display(), code.to_string());
-        }
-    }
-    // Then kill the wrongdoer
-    print!("Killing process now...");
+    print!("Found malicious process, PID={}\nKilling process now...", pid);
     if let Err(code) = signal::kill(pid, signal::SIGKILL) {
         println!("Failed.");
         eprintln!("Cannot send signal to process {} : {}", pid, code.to_string());
