@@ -8,7 +8,6 @@ use nix::{self, errno::*};
 use nix::sys::signal;
 use nix::unistd::{self, Pid};
 use nix::poll::{poll, PollFd, PollFlags};
-use libc;
 
 use crate::fanotify_wrappers::*;
 
@@ -28,7 +27,7 @@ pub fn prepare_input(path: &str) -> nix::Result<(Fanotify, [PollFd; 2])> {
         PollFd::new(libc::STDIN_FILENO as RawFd, PollFlags::POLLIN),
         PollFd::new(fanotify.as_raw_fd(), PollFlags::POLLIN),
     ];
-    return Ok((fanotify, fds));
+    Ok((fanotify, fds))
 }
 
 const FLUSH_PERIOD: u32 = 64;
@@ -150,10 +149,10 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
 fn kill_process(pid: Pid) {
-    print!("Found malicious process, PID={}\nKilling process now...", pid);
+    print!("Found malicious process, PID={pid}\nKilling process now...");
     if let Err(code) = signal::kill(pid, signal::SIGKILL) {
         println!("Failed.");
-        eprintln!("Cannot send signal to process {} : {}", pid, code.to_string());
+        eprintln!("Cannot send signal to process {pid} : {code}");
     } else {
         println!(" Done.");
     }
@@ -266,7 +265,7 @@ fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats>) -
             Ok(vec) => vec,
             Err(Errno::EAGAIN) => break,
             Err(code) => {
-                println!("Read from fanotify failed: {}", code.to_string());
+                println!("Read from fanotify failed: {code}");
                 process::exit(code as i32);
             }
         };

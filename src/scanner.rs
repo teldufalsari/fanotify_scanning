@@ -1,6 +1,5 @@
 use std::{env, process};
 use std::collections::HashMap;
-use nix;
 use nix::unistd::Pid;
 use nix::errno::Errno;
 
