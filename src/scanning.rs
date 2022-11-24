@@ -95,6 +95,13 @@ enum Distance {
     Far,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ProcessIds {
+    pid: Pid,
+    parent_id: Pid
+}
+
+
 /// Max value of susness field that processes are allowed to have.
 ///  If this value is exceeded, the process is killed.
 const CRITICAL_SUSNESS: i32 = 5; 
@@ -134,6 +141,38 @@ fn distance(path1: &Path, path2: &Path) -> Distance {
     Distance::Far
 }
 
+
+/// Get all process id's available in `/proc together with their
+/// parent id's.
+/// 
+/// This function may get extended and improved in future.
+fn get_process_table() -> std::io::Result<Vec<ProcessIds>> {
+    let iterator = fs::read_dir("/proc")?;
+    let table = iterator // we get a directory iterator
+        .filter(|x| x.is_ok()) // keep only good results
+        .map(|x| x.unwrap().path()) // take only paths
+        .filter(|path| // and keep only those that end with a non-negative integer
+            path.file_name().unwrap().to_str().unwrap().chars().all(char::is_numeric))
+        .map(|mut path| { // read everything from /proc/[pid]/stat
+            path.push("stat");
+            fs::read_to_string(path)
+        })
+        .filter(|x| x.is_ok()) // keep only good results
+        .map(|stat| { // read only pid and ppid from /proc/[pid]/stat contents
+            let stat = stat.unwrap();
+            let mut stat = stat.split(' ');
+            // The first number is pid
+            let pid = Pid::from_raw(stat.next().unwrap().parse::<i32>().unwrap());
+            // skip nonnumerical records
+            let mut stat = stat.skip_while(|x| !x.chars().all(char::is_numeric));
+            // The second *numerical* record is parent pid
+            let parent_id = Pid::from_raw(stat.next().unwrap().parse::<i32>().unwrap());
+            ProcessIds {pid, parent_id}
+        })
+        .collect::<Vec<_>>(); // turbofish:D
+    Ok(table)
+}
+
 // Read file name from the fanotify event file descriptor
 fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
     let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
@@ -144,18 +183,57 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
     })
 }
 
-// This function tries to remove executable and then kill the process.
+// This function tries to kill the process.
 // All open calls from the process will be blocked until it's killed.
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
 fn kill_process(pid: Pid) {
-    print!("Found malicious process, PID={pid}\nKilling process now...");
-    if let Err(code) = signal::kill(pid, signal::SIGKILL) {
-        println!("Failed.");
+    print!("Killing {pid}...");
+    if let Err(code) = signal::kill(pid, signal::SIGTERM) {
+        println!("failed.");
         eprintln!("Cannot send signal to process {pid} : {code}");
     } else {
-        println!(" Done.");
+        println!("done.");
     }
+}
+
+// This function tries to all processes that are descendants to `pid`.
+// All open calls from the process will be blocked until it's killed.
+// The function does not return errno, instead it writes error messages
+// to stderr and stdout.
+fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>) {
+    for proc in proc_table {
+        if proc.parent_id == pid {
+            kill_process(proc.pid);
+            kill_descendants(proc.pid, proc_table)
+        }
+    }
+}
+
+// This function tries to kill all process children, as well as
+// the parent process unless it is init (pid = 0)
+// The function does not return errno, instead it writes error messages
+// to stderr and stdout.
+fn kill_process_and_related(pid: Pid) {
+    println!("Found malicious process, PID={pid}");
+    // kill all child processes and the parent process:
+    if let Ok(proc_table) = get_process_table() {
+        // Kill parent process
+        if let Ok(i) = proc_table.binary_search_by(|probe| probe.pid.cmp(&pid)) {
+            if proc_table[i].parent_id.as_raw() != 0 {
+                // killing parent should be nerfed
+                //kill_process(proc_table[i].parent_id);
+            }
+        }
+        // now write a beautiful recursive call that will destroy child processess
+        kill_descendants(pid, &proc_table);
+    } else {
+        println!("Cannot access /proc. Why?");
+        eprintln!("Cannot access /proc");
+    }
+    // Kill the process itself
+    // Use SIGTERM insread of SIGKILL for academic purposes
+    kill_process(pid);
 }
 
 // Send response to the process that tries to open a file
@@ -227,7 +305,7 @@ fn handle_modify_event(
         }
     }
     if proc_stats.susness > CRITICAL_SUSNESS {
-        kill_process(metadata.pid);
+        kill_process_and_related(metadata.pid);
         proc_table.remove(&metadata.pid);
     }
     Ok(())
