@@ -1,13 +1,17 @@
+#![warn(clippy::all, clippy::pedantic)]
+#![warn(nonstandard_style)]
+#![warn(rust_2018_idioms)]
+
 use std::{env, process};
 use std::collections::HashMap;
 use nix::unistd::Pid;
 use nix::errno::Errno;
 
+use crate::scanning::main_loop::*;
+use crate::scanning::proc_stats::ProcStats;
+
+mod fanotify;
 mod scanning;
-mod fanotify_wrappers;
-
-use scanning::*;
-
 
 fn main() {
     let argv: Vec<String> = env::args().collect();

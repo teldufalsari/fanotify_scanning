@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::mem::{MaybeUninit, size_of};
 use std::os::unix::io::{RawFd, AsRawFd, FromRawFd};
 use std::ptr;
