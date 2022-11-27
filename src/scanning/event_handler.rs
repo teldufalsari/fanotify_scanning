@@ -9,8 +9,8 @@ use nix::errno::Errno;
 use nix::sys::signal;
 
 use crate::fanotify::{self, Fanotify, EventFlags};
-use crate::scanning::proc_stats::*;
-use crate::scanning::distance::*;
+use crate::scanning::proc_stats::ProcStats;
+use crate::scanning::distance::{distance, Distance};
 use crate::config::Config;
 
 
@@ -27,7 +27,7 @@ struct ProcessIds {
 }
 
 impl EventHandler {
-    /// Creates a new EventHandler instance with default config
+    /// Creates a new `EventHandler` instance with default config
     pub fn new() -> EventHandler {
         EventHandler {
             proc_table: HashMap::new(), 
@@ -35,7 +35,7 @@ impl EventHandler {
         }
     }
 
-    /// Creates a new EventHandler instance with the given config
+    /// Creates a new `EventHandler` instance with the given config
     pub fn with_config(config: Config) -> EventHandler {
         EventHandler {
             proc_table: HashMap::new(), 
@@ -174,10 +174,10 @@ impl EventHandler {
     // to stderr and stdout.
     fn kill_process_and_related(&self, pid: Pid) {
         println!("Found malicious process, PID={pid}");
-        let signal = if self.config.use_sigterm == true {signal::SIGTERM} else {signal::SIGKILL};
+        let signal = if self.config.use_sigterm {signal::SIGTERM} else {signal::SIGKILL};
         // if true - kill all process group
         // if any processes left - kill them
-        if self.config.kill_proc_group == true {
+        if self.config.kill_proc_group {
             kill_process_group(pid, signal);
             println!("Killing remaining processes...");
         }
@@ -185,11 +185,11 @@ impl EventHandler {
         if let Ok(proc_table) = get_process_table() {
             // Kill parent process
             if let Ok(i) = proc_table.binary_search_by(|probe| probe.pid.cmp(&pid)) {
-                if self.config.kill_parent == true && proc_table[i].parent_id.as_raw() != 1 {
+                if self.config.kill_parent && proc_table[i].parent_id.as_raw() != 1 {
                     kill_process(proc_table[i].parent_id, signal);
                 }
             }
-            if self.config.kill_children == true {
+            if self.config.kill_children {
                 kill_descendants(pid, &proc_table, signal);
             }
         } else {

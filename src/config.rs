@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 
 const PATH_TO_CONFIG: &str = "/etc/daeth/config";
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Struct that hold all application settings
 pub struct Config {

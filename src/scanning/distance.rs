@@ -16,27 +16,26 @@ pub fn distance(path1: &Path, path2: &Path) -> Distance {
     let parent2 = path2.parent().unwrap();
     if parent1.eq(parent2) {
         return Distance::SameDir;
-    } else {
-        let pparent1 = parent1.parent();
-        let pparent2 = parent2.parent();
-        if pparent1 != None {
-            if pparent2 != None {
-                if pparent1.unwrap().eq(pparent2.unwrap()) {
-                    return  Distance::NeigbourDirs;
-                }
-            } else { // pparent2 = None
-                if pparent1.unwrap().eq(parent2) {
-                    return  Distance::NeigbourDirs;
-                }
-            }
-        } else {
-            // pparent1 = None, pparent2 is not None
-            // Because if both  pparent1 and pparent2 are None,
-            // parent1 and parent2 are both "/" and thus parent1.eq(parent2) is true,
-            // but it's not since it's been already checked above.
-            if parent1.eq(pparent2.unwrap()) {
+    }
+    let grandparent1 = parent1.parent();
+    let grandparent2 = parent2.parent();
+    if let Some(gp1) = grandparent1 {
+        if let Some(gp2) = grandparent2 {
+            if gp1 == gp2 {
                 return  Distance::NeigbourDirs;
             }
+        } else { // grandparent2 = None
+            if gp1 == parent2 {
+                return  Distance::NeigbourDirs;
+            }
+        }
+    } else {
+        // grandparent1 = None, grandparent2 is not None
+        // Because if both  pparent1 and pparent2 are None,
+        // parent1 and parent2 are both "/" and thus parent1.eq(parent2) is true,
+        // but it's not since it's been already checked above.
+        if parent1.eq(grandparent2.unwrap()) {
+            return  Distance::NeigbourDirs;
         }
     }
     Distance::Far
