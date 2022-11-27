@@ -7,7 +7,7 @@ use nix::errno::Errno;
 
 use crate::config::Config;
 use crate::scanning::main_loop::{
-    prepare_input,
+    prepare_fanotify,
     loop_until_input_recieved,
 };
 
@@ -32,7 +32,7 @@ fn main() {
     };
 
     // Create a file descriptor for accessing the fanotify API and prepare for polling.
-    let (fanotify, fds) = match prepare_input(argv[1].as_str()) {
+    let fanotify = match prepare_fanotify(argv[1].as_str()) {
         Ok(val) => val,
         Err(Errno::EPERM) => {
             println!("Operation not permitted. Rerun as root.");
@@ -45,9 +45,8 @@ fn main() {
     };
     // Run main listening loop.
     println!("Listening for events.");
-    if let Err(code) = loop_until_input_recieved(fanotify, fds, config) {
+    if let Err(code) = loop_until_input_recieved(fanotify, config) {
         eprintln!("Error: {}", code.desc());
         process::exit(1);
     }
-    println!("Listening for events stopped.");
 }
