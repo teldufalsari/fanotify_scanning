@@ -1,20 +1,11 @@
 use std::os::unix::prelude::{RawFd, AsRawFd};
+use std::time::Duration;
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::errno::Errno;
 
 use crate::config::Config;
 use crate::fanotify::{Fanotify, OpenFlags, InitFlags, MarkFlags, EventFlags};
 use crate::scanning::event_handler::EventHandler;
-
-// ~~~~~~~ Constants that should be loaded from config: ~~~~~~~
-
-/// Max time a process can be inactive before its stats get removed from
-/// process table.
-const FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Max value of susness field that processes are allowed to have.
-///  If this value is exceeded, the process is killed.
-pub const CRITICAL_SUSNESS: i32 = 5; 
 
 // ~~~~~~~ Hard-coded constant ~~~~~~~
 const FLUSH_PERIOD: u32 = 64;
@@ -45,6 +36,7 @@ pub fn loop_until_input_recieved(
     config: Config
 ) -> nix::Result<()> {
     let mut flush_counter = 0u32;
+    let flust_timeout = Duration::from_secs(config.flush_timeout_sec);
     let mut handler = EventHandler::with_config(config);
     loop {
         let poll_num = match poll(&mut fds, -1) {
@@ -61,7 +53,7 @@ pub fn loop_until_input_recieved(
                 flush_counter += 1;
                 handler.handle_events(fanotify)?;
                 if flush_counter > FLUSH_PERIOD {
-                    handler.flush(FLUSH_TIMEOUT);
+                    handler.flush(flust_timeout);
                     flush_counter = 0;
                 }
             }

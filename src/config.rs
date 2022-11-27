@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::str::FromStr;
 use std::path::PathBuf;
 use std::fs;
@@ -15,34 +13,34 @@ pub struct Config {
     /// 
     /// If false, allow list is ignored and all suspicious
     /// processes are killed immediately
-    enable_allowlist: bool,
+    pub enable_allowlist: bool,
     /// Path to SQLite3 database file
     /// with allow list
-    allowlist_path: PathBuf,
+    pub allowlist_path: PathBuf,
     /// Max time a process can be inactive before its stats get removed from
     /// process table.
-    flush_timeout_sec: u32,
+    pub flush_timeout_sec: u64,
     /// Max value of susness field that processes are allowed to have.
     ///  If this value is exceeded, the process is killed.
-    critical_susp: i32,
+    pub critical_susp: i32,
     
     // ~~~~~~~~~~ [Killing] ~~~~~~~~~~ //
     /// When killing a suspicious process, also
     /// kill its parent process
-    kill_parent: bool,
+    pub kill_parent: bool,
     /// When killing a suspicious process, also
     /// kill all its descendants recursively
-    kill_children: bool,
+    pub kill_children: bool,
     /// When killing a suspicious process,
     /// kill the entire process group the process
     /// belongs to
-    kill_proc_group: bool,
+    pub kill_proc_group: bool,
     /// *For debug purposes.*
-    /// 
+    ///
     /// When killing a suspicious process, send
     /// `SIGTERM` instead of `SIGKILL`, so that accidentally
     /// killed processes could cleanup before exiting
-    use_sigterm: bool,
+    pub use_sigterm: bool,
 }
 
 impl Default for Config {
