@@ -7,11 +7,16 @@ use std::collections::HashMap;
 use nix::unistd::Pid;
 use nix::errno::Errno;
 
-use crate::scanning::main_loop::*;
+use crate::scanning::main_loop::{
+    prepare_input,
+    loop_until_input_recieved,
+};
 use crate::scanning::proc_stats::ProcStats;
+use crate::config::Config;
 
 mod fanotify;
 mod scanning;
+mod config;
 
 fn main() {
     let argv: Vec<String> = env::args().collect();
@@ -20,6 +25,15 @@ fn main() {
         println!("Usage: {} MOUNT", argv[0]);
         process::exit(1);
     }
+    // load config
+    let _config = match Config::load() {
+        Ok(c) => c,
+        Err(descr) => {
+            print!("Cannot read config file: {}\nFalling back to defaults\n", descr);
+            Config::default()
+        }
+    };
+
     // Create the file descriptor for accessing the fanotify API and prepare for polling.
     let (fanotify, fds) = match prepare_input(argv[1].as_str()) {
         Ok(val) => val,
