@@ -11,7 +11,6 @@ use nix::sys::signal;
 use crate::fanotify::{self, Fanotify, EventFlags};
 use crate::scanning::proc_stats::*;
 use crate::scanning::distance::*;
-use crate::scanning::main_loop::CRITICAL_SUSNESS;
 use crate::config::Config;
 
 
@@ -85,7 +84,7 @@ impl EventHandler {
         fanotify: Fanotify
     ) -> nix::Result<()> {
         let response = if let Some(process) = self.proc_table.get(&metadata.pid) {
-            if process.susness > CRITICAL_SUSNESS {
+            if process.susness > self.config.critical_susp  {
                 fanotify::Response::FAN_DENY
             } else {
                 fanotify::Response::FAN_ALLOW
@@ -139,8 +138,8 @@ impl EventHandler {
                 proc_stats.last_update_time = SystemTime::now();
             }
         }
-        if proc_stats.susness > CRITICAL_SUSNESS {
-            kill_process_and_related(metadata.pid);
+        if proc_stats.susness > self.config.critical_susp {
+            self.kill_process_and_related(metadata.pid);
             self.proc_table.remove(&metadata.pid);
         }
         Ok(())
@@ -157,7 +156,8 @@ impl EventHandler {
             process::exit(1);
         }
         if metadata.fd >= 0 {
-            if metadata.mask.contains(EventFlags::FAN_OPEN_PERM) || metadata.mask.contains(EventFlags::FAN_OPEN_EXEC_PERM) {
+            if metadata.mask.contains(EventFlags::FAN_OPEN_PERM) ||
+               metadata.mask.contains(EventFlags::FAN_OPEN_EXEC_PERM) {
                 self.handle_open_perm(metadata, fanotify)?;
             }
             if metadata.mask.contains(EventFlags::FAN_CLOSE_WRITE) {
@@ -167,6 +167,39 @@ impl EventHandler {
         }
         Ok(())
     }
+
+        // This function tries to kill all process children, as well as
+    // the parent process unless it is init (pid = 0)
+    // The function does not return errno, instead it writes error messages
+    // to stderr and stdout.
+    fn kill_process_and_related(&self, pid: Pid) {
+        println!("Found malicious process, PID={pid}");
+        let signal = if self.config.use_sigterm == true {signal::SIGTERM} else {signal::SIGKILL};
+        // if true - kill all process group
+        // if any processes left - kill them
+        if self.config.kill_proc_group == true {
+            kill_process_group(pid, signal);
+            println!("Killing remaining processes...");
+        }
+        // kill all child processes and the parent process:
+        if let Ok(proc_table) = get_process_table() {
+            // Kill parent process
+            if let Ok(i) = proc_table.binary_search_by(|probe| probe.pid.cmp(&pid)) {
+                if self.config.kill_parent == true && proc_table[i].parent_id.as_raw() != 1 {
+                    kill_process(proc_table[i].parent_id, signal);
+                }
+            }
+            if self.config.kill_children == true {
+                kill_descendants(pid, &proc_table, signal);
+            }
+        } else {
+            println!("Cannot access /proc. Why?");
+            eprintln!("Cannot access /proc");
+        }
+        // Kill the process itself
+        kill_process(pid, signal);
+    }
+
 }
 
 
@@ -215,11 +248,26 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
 // All open calls from the process will be blocked until it's killed.
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
-fn kill_process(pid: Pid) {
+fn kill_process(pid: Pid, signal: signal::Signal) {
     print!("Killing {pid}...");
-    if let Err(code) = signal::kill(pid, signal::SIGTERM) {
+    if let Err(code) = signal::kill(pid, signal) {
         println!("failed.");
         eprintln!("Cannot send signal to process {pid} : {code}");
+    } else {
+        println!("done.");
+    }
+}
+
+// This function tries to kill the process group specified by id.
+// All open calls from the processes will be blocked until they are killed.
+// The function does not return errno, instead it writes error messages
+// to stderr and stdout.
+fn kill_process_group(pid: Pid, signal: signal::Signal) {
+    print!("Killing process group {pid}...");
+    let pg_id =  Pid::from_raw(-pid.as_raw());
+    if let Err(code) = signal::kill(pg_id, signal) {
+        println!("failed.");
+        eprintln!("Cannot kill process group {pid} : {code}");
     } else {
         println!("done.");
     }
@@ -229,38 +277,11 @@ fn kill_process(pid: Pid) {
 // All open calls from the process will be blocked until it's killed.
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
-fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>) {
+fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>, signal: signal::Signal) {
     for proc in proc_table {
         if proc.parent_id == pid {
-            kill_process(proc.pid);
-            kill_descendants(proc.pid, proc_table);
+            kill_process(proc.pid, signal);
+            kill_descendants(proc.pid, proc_table, signal);
         }
     }
-}
-
-// This function tries to kill all process children, as well as
-// the parent process unless it is init (pid = 0)
-// The function does not return errno, instead it writes error messages
-// to stderr and stdout.
-fn kill_process_and_related(pid: Pid) {
-    println!("Found malicious process, PID={pid}");
-    // kill all child processes and the parent process:
-    if let Ok(proc_table) = get_process_table() {
-        // Kill parent process
-        if let Ok(i) = proc_table.binary_search_by(|probe| probe.pid.cmp(&pid)) {
-            if proc_table[i].parent_id.as_raw() != 1 {
-                // killing parent should be nerfed
-                //kill_process(proc_table[i].parent_id);
-                println!("Killing {}...done.", proc_table[i].parent_id);
-            }
-        }
-        // now write a beautiful recursive call that will destroy child processess
-        kill_descendants(pid, &proc_table);
-    } else {
-        println!("Cannot access /proc. Why?");
-        eprintln!("Cannot access /proc");
-    }
-    // Kill the process itself
-    // Use SIGTERM insread of SIGKILL for academic purposes
-    kill_process(pid);
 }
