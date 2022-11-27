@@ -1,13 +1,10 @@
-use std::collections::HashMap;
 use std::os::unix::prelude::{RawFd, AsRawFd};
-use std::time::{self, SystemTime};
 use nix::poll::{PollFd, PollFlags, poll};
-use nix::unistd::Pid;
 use nix::errno::Errno;
 
+use crate::config::Config;
 use crate::fanotify::{Fanotify, OpenFlags, InitFlags, MarkFlags, EventFlags};
-use crate::scanning::proc_stats::ProcStats;
-use crate::scanning::event_handling::handle_events;
+use crate::scanning::event_handler::EventHandler;
 
 // ~~~~~~~ Constants that should be loaded from config: ~~~~~~~
 
@@ -45,9 +42,10 @@ pub fn prepare_input(path: &str) -> nix::Result<(Fanotify, [PollFd; 2])> {
 pub fn loop_until_input_recieved(
     fanotify: Fanotify,
     mut fds: [PollFd; 2],
-    mut proc_table: HashMap<Pid, ProcStats>
+    config: Config
 ) -> nix::Result<()> {
     let mut flush_counter = 0u32;
+    let mut handler = EventHandler::with_config(config);
     loop {
         let poll_num = match poll(&mut fds, -1) {
             Err(Errno::EINTR) => continue,
@@ -61,9 +59,9 @@ pub fn loop_until_input_recieved(
             if fds[1].revents().unwrap_or(PollFlags::empty()).contains(PollFlags::POLLIN) {
                 // Fanotify events are available.
                 flush_counter += 1;
-                handle_events(fanotify, &mut proc_table)?;
+                handler.handle_events(fanotify)?;
                 if flush_counter > FLUSH_PERIOD {
-                    flush(&mut proc_table, FLUSH_TIMEOUT);
+                    handler.flush(FLUSH_TIMEOUT);
                     flush_counter = 0;
                 }
             }
@@ -71,11 +69,3 @@ pub fn loop_until_input_recieved(
     }
     Ok(())
 }
-
-fn flush(proc_table: &mut HashMap<Pid, ProcStats>, timeout: std::time::Duration) {
-    let now = SystemTime::now();
-    proc_table.retain(|_, stats| {
-        now.duration_since(stats.last_update_time).unwrap_or(time::Duration::ZERO) < timeout
-    });
-}
-
