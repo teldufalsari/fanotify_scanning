@@ -6,7 +6,7 @@ use nix::unistd::{self, Pid};
 use nix::errno::Errno;
 use nix::sys::signal;
 
-use crate::fanotify::*;
+use crate::fanotify::{self, Fanotify, EventFlags};
 use crate::scanning::proc_stats::*;
 use crate::scanning::distance::*;
 use crate::scanning::main_loop::CRITICAL_SUSNESS;
@@ -32,7 +32,7 @@ pub fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats
             }
         };
         // Loop over all events in the buffer.
-        for event in events.iter() {
+        for event in &events {
             handle_event(event, fanotify, proc_table)?;
         }
     }
@@ -45,18 +45,18 @@ pub fn handle_events(fanotify: Fanotify, proc_table: &mut HashMap<Pid, ProcStats
 // With the given approach read-only processes don't need
 // to be held in the process table.
 fn handle_open_perm(
-    metadata: &FanotifyEventMetadata,
+    metadata: &fanotify::EventMetadata,
     fanotify: Fanotify,
     proc_table: &mut HashMap<Pid, ProcStats>
 ) -> nix::Result<()> {
     let response = if let Some(process) = proc_table.get(&metadata.pid) {
         if process.susness > CRITICAL_SUSNESS {
-            Response::FAN_DENY
+            fanotify::Response::FAN_DENY
         } else {
-            Response::FAN_ALLOW
+            fanotify::Response::FAN_ALLOW
         }
     } else {
-        Response::FAN_ALLOW
+        fanotify::Response::FAN_ALLOW
     };
     fanotify.respond(metadata.fd, response)?;
     Ok(())
@@ -66,17 +66,17 @@ fn handle_open_perm(
 /// or add a new process to the table.
 /// If the process is suspicious, `kill_process` is called.
 fn handle_modify_event(
-    metadata: &FanotifyEventMetadata,
+    metadata: &fanotify::EventMetadata,
     proc_table: &mut HashMap<Pid, ProcStats>
 ) -> nix::Result<()> {
     // Retirieve write statistics for that process
-    let proc_stats = match proc_table.get_mut(&metadata.pid) {
-        Some(val) => val,
-        None => {
-            proc_table.insert(metadata.pid, ProcStats::new());
-            proc_table.get_mut(&metadata.pid).unwrap()
-        }
+    let proc_stats = if let Some(val) = proc_table.get_mut(&metadata.pid) {
+        val
+    } else {
+        proc_table.insert(metadata.pid, ProcStats::new());
+        proc_table.get_mut(&metadata.pid).unwrap()
     };
+
     if proc_stats.paths.is_empty() {
         // If it's a new process, retrieve the modified
         // file name and add it to the paths vector
@@ -115,12 +115,12 @@ fn handle_modify_event(
 }
 
 fn handle_event(
-    metadata: &FanotifyEventMetadata,
+    metadata: &fanotify::EventMetadata,
     fanotify: Fanotify,
     proc_table: &mut HashMap<Pid, ProcStats>
 ) -> nix::Result<()> {
     // Check that run-time and compile-time structures match.
-    if metadata.vers != FANOTIFY_METADATA_VERSION {
+    if metadata.vers != fanotify::FANOTIFY_METADATA_VERSION {
         eprintln!("Mismatch of fanotify metadata version.");
         process::exit(1);
     }
@@ -136,14 +136,14 @@ fn handle_event(
     Ok(())
 }
 
-/// Get all process id's available in `/proc together with their
+/// Get all process id's available in `/proc` together with their
 /// parent id's.
 /// 
 /// This function may get extended and improved in future.
 fn get_process_table() -> std::io::Result<Vec<ProcessIds>> {
     let iterator = fs::read_dir("/proc")?;
     let table = iterator // we get a directory iterator
-        .filter(|x| x.is_ok()) // keep only good results
+        .filter(Result::is_ok) // keep only good results
         .map(|x| x.unwrap().path()) // take only paths
         .filter(|path| // and keep only those that end with a non-negative integer
             path.file_name().unwrap().to_str().unwrap().chars().all(char::is_numeric))
@@ -151,7 +151,7 @@ fn get_process_table() -> std::io::Result<Vec<ProcessIds>> {
             path.push("stat");
             fs::read_to_string(path)
         })
-        .filter(|x| x.is_ok()) // keep only good results
+        .filter(Result::is_ok) // keep only good results
         .map(|stat| { // read only pid and ppid from /proc/[pid]/stat contents
             let stat = stat.unwrap();
             let mut stat = stat.split(' ');
@@ -199,7 +199,7 @@ fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>) {
     for proc in proc_table {
         if proc.parent_id == pid {
             kill_process(proc.pid);
-            kill_descendants(proc.pid, proc_table)
+            kill_descendants(proc.pid, proc_table);
         }
     }
 }

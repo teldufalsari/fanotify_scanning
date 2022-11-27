@@ -5,7 +5,7 @@ use nix::poll::{PollFd, PollFlags, poll};
 use nix::unistd::Pid;
 use nix::errno::Errno;
 
-use crate::fanotify::*;
+use crate::fanotify::{Fanotify, OpenFlags, InitFlags, MarkFlags, EventFlags};
 use crate::scanning::proc_stats::ProcStats;
 use crate::scanning::event_handling::handle_events;
 
