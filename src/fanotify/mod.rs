@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::unreadable_literal)]
 
 use std::mem::{MaybeUninit, size_of};
 use std::os::unix::io::{RawFd, AsRawFd, FromRawFd};
@@ -343,7 +344,7 @@ pub struct Fanotify {
 }
 
 #[derive(Debug, Clone)]
-pub struct FanotifyEventMetadata {
+pub struct EventMetadata {
     /// Length of the data for the current event and the
     /// offset to the next event in the buffer.
     pub event_len: u32,
@@ -374,7 +375,7 @@ impl Fanotify {
     /// 
     /// Returns a `Result` containing a fanotify instance.
     /// 
-    /// For more information, see [fanotify_init(2)](https://man7.org/linux/man-pages/man2/fanotify_init.2.html).
+    /// For more information, see [`fanotify_init(2)`](https://man7.org/linux/man-pages/man2/fanotify_init.2.html).
     pub fn fanotify_init(flags: InitFlags, event_f_flags: OpenFlags) -> Result<Fanotify> {
         let res = Errno::result( 
             unsafe {
@@ -439,9 +440,9 @@ impl Fanotify {
     ///
     /// Returns as many events as available. If the call was non blocking and no
     /// events could be read then the `EAGAIN` error is returned.
-    pub fn read_events(self) -> Result<Vec<FanotifyEventMetadata>> {
-        let metadata_size = size_of::<libc::fanotify_event_metadata>();
+    pub fn read_events(self) -> Result<Vec<EventMetadata>> {
         const BUFSIZ: usize = 4096;
+        let metadata_size = size_of::<libc::fanotify_event_metadata>();
         let mut buffer = [0u8; BUFSIZ];
         let mut events = Vec::new();
         let mut offset = 0;
@@ -453,12 +454,12 @@ impl Fanotify {
                 let mut event = MaybeUninit::<libc::fanotify_event_metadata>::uninit();
                 ptr::copy_nonoverlapping( // Equivalent to libc::memcpy(), as opposed to ptr::copy() <=> libc::memmove()
                     buffer.as_ptr().add(offset),
-                    event.as_mut_ptr() as *mut u8,
+                    event.as_mut_ptr().cast::<u8>(),
                     metadata_size
                 );
                 event.assume_init()
             };
-            events.push(FanotifyEventMetadata{
+            events.push(EventMetadata{
                 event_len: event.event_len,
                 vers: event.vers,
                 metadata_len: event.metadata_len,
@@ -476,15 +477,15 @@ impl Fanotify {
     /// Needed for `FAN_OPEN_PERM` and `FAN_OPEN_EXEC_PERM` events.
     pub fn respond(self, fd: RawFd, response: Response) -> Result<usize> {
         let resp_struct = libc::fanotify_response{
-            fd: fd,
+            fd,
             response: response.bits(),
         };
         let mut buffer = [0u8; size_of::<libc::fanotify_response>()];
         unsafe {
             ptr::copy_nonoverlapping(
-                &resp_struct as *const libc::fanotify_response as *const u8, 
+                std::ptr::addr_of!(resp_struct).cast::<u8>(),
                 buffer.as_mut_ptr(),
-                buffer.len())
+                buffer.len());
         };
         write(self.fd, &buffer)
     }
