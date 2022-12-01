@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::{process, fs, str::FromStr};
 use std::path::PathBuf;
@@ -7,6 +5,7 @@ use std::time::{self, SystemTime};
 use nix::unistd::{self, Pid};
 use nix::errno::Errno;
 use nix::sys::signal;
+use log;
 
 use crate::fanotify::{self, Fanotify, EventFlags};
 use crate::scanning::proc_stats::ProcStats;
@@ -14,7 +13,6 @@ use crate::scanning::distance::{distance, Distance};
 use crate::config::Config;
 
 
-#[derive(Debug)]
 pub struct EventHandler {
     proc_table: HashMap<Pid, ProcStats>,
     config: Config,
@@ -27,13 +25,13 @@ struct ProcessIds {
 }
 
 impl EventHandler {
-    /// Creates a new `EventHandler` instance with default config
-    pub fn new() -> EventHandler {
-        EventHandler {
-            proc_table: HashMap::new(), 
-            config: Config::default(),
-        }
-    }
+    // /// Creates a new `EventHandler` instance with default config
+    //pub fn new() -> EventHandler {
+    //    EventHandler {
+    //        proc_table: HashMap::new(), 
+    //        config: Config::default(),
+    //    }
+    //}
 
     /// Creates a new `EventHandler` instance with the given config
     pub fn with_config(config: Config) -> EventHandler {
@@ -52,10 +50,7 @@ impl EventHandler {
             let events = match fanotify.read_events() {
                 Ok(vec) => vec,
                 Err(Errno::EAGAIN) => break,
-                Err(code) => {
-                    println!("Read from fanotify failed: {code}");
-                    process::exit(code as i32);
-                }
+                Err(code) => return Err(code)
             };
             // Loop over all events in the buffer.
             for event in &events {
@@ -152,7 +147,7 @@ impl EventHandler {
     ) -> nix::Result<()> {
         // Check that run-time and compile-time structures match.
         if metadata.vers != fanotify::FANOTIFY_METADATA_VERSION {
-            eprintln!("Mismatch of fanotify metadata version.");
+            log::error!("Fatal error: mismatch of fanotify metadata version.");
             process::exit(1);
         }
         if metadata.fd >= 0 {
@@ -173,13 +168,13 @@ impl EventHandler {
     // The function does not return errno, instead it writes error messages
     // to stderr and stdout.
     fn kill_process_and_related(&self, pid: Pid) {
-        println!("Found malicious process, PID={pid}");
+        log::info!("Found malicious process, PID={pid}");
         let signal = if self.config.use_sigterm {signal::SIGTERM} else {signal::SIGKILL};
         // if true - kill all process group
         // if any processes left - kill them
         if self.config.kill_proc_group {
             kill_process_group(pid, signal);
-            println!("Killing remaining processes...");
+            log::trace!("Killing remaining processes...");
         }
         // kill all child processes and the parent process:
         if let Ok(proc_table) = get_process_table() {
@@ -193,8 +188,7 @@ impl EventHandler {
                 kill_descendants(pid, &proc_table, signal);
             }
         } else {
-            println!("Cannot access /proc. Why?");
-            eprintln!("Cannot access /proc");
+            log::warn!("Error: cannot access /proc");
         }
         // Kill the process itself
         kill_process(pid, signal);
@@ -249,12 +243,9 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
 fn kill_process(pid: Pid, signal: signal::Signal) {
-    print!("Killing {pid}...");
+    log::trace!("Killing {pid}...");
     if let Err(code) = signal::kill(pid, signal) {
-        println!("failed.");
-        eprintln!("Cannot send signal to process {pid} : {code}");
-    } else {
-        println!("done.");
+        log::warn!("Error: cannot send signal to process {pid} : {code}");
     }
 }
 
@@ -263,13 +254,10 @@ fn kill_process(pid: Pid, signal: signal::Signal) {
 // The function does not return errno, instead it writes error messages
 // to stderr and stdout.
 fn kill_process_group(pid: Pid, signal: signal::Signal) {
-    print!("Killing process group {pid}...");
+    log::trace!("Killing process group {pid}...");
     let pg_id =  Pid::from_raw(-pid.as_raw());
     if let Err(code) = signal::kill(pg_id, signal) {
-        println!("failed.");
-        eprintln!("Cannot kill process group {pid} : {code}");
-    } else {
-        println!("done.");
+        log::warn!("Error: cannot kill process group {pid} : {code}");
     }
 }
 
