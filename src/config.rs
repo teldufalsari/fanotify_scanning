@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::fs;
 use serde::{Serialize, Deserialize};
 
-const PATH_TO_CONFIG: &str = "/etc/daeth/config";
+const PATH_TO_CONFIG: &str = "/etc/krom/config.json";
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -48,7 +48,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             enable_allowlist: true,
-            allowlist_path: PathBuf::from_str("/etc/daeth/allowlist.db").unwrap(),
+            allowlist_path: PathBuf::from_str("/etc/krom/allowlist.db").unwrap(),
             flush_timeout_sec: 120,
             critical_susp: 5,
             kill_parent: false,
