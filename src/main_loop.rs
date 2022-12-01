@@ -1,0 +1,96 @@
+use std::process;
+use std::os::unix::prelude::AsRawFd;
+use std::time::Duration;
+use nix::poll::{PollFd, PollFlags, poll};
+use nix::errno::Errno;
+use syslog::{self, Facility, BasicLogger};
+use exitcode;
+use log::{self, LevelFilter};
+
+use crate::config::Config;
+use crate::fanotify::{Fanotify, OpenFlags, InitFlags, MarkFlags, EventFlags};
+use crate::scanning::event_handler::EventHandler;
+
+// ~~~~~~~ Hard-coded constant ~~~~~~~
+const FLUSH_PERIOD: u32 = 64;
+
+
+pub fn start(mount_point: &str) {
+    // Create syslog logger
+    let formatter = syslog::Formatter3164 {
+        facility: Facility::LOG_DAEMON,
+        hostname: None,
+        process: "krom".to_owned(),
+        pid: process::id(),
+    };
+    let logger = syslog::unix(formatter).unwrap();
+    log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
+        .map(|()| log::set_max_level(LevelFilter::Trace)).unwrap();
+
+    // Load config
+    let config = match Config::load() {
+        Ok(c) => c,
+        Err(_) => {
+            log::warn!("Cannot read config file, falling back to defaults");
+            Config::default()
+        }
+    };
+
+    // Create a file descriptor for accessing the fanotify API and prepare for polling.
+    let fanotify = match prepare_fanotify(mount_point) {
+        Ok(val) => val,
+        Err(Errno::EPERM) => {
+            log::error!("Fatal error: operation not permitted. Rerun as root.");
+            process::exit(exitcode::NOPERM);
+        }
+        Err(code) => {
+            log::error!("Fatal error: {}", code.desc());
+            process::exit(exitcode::OSERR);
+        }
+    };
+    // Run main listening loop.
+    log::info!("Daemon started; listening for events");
+    if let Err(code) = loop_until_input_recieved(fanotify, config) {
+        log::error!("Fatal error: {}", code.desc());
+        process::exit(exitcode::OSERR);
+    }
+}
+
+/// Initialize fanotify instance with appropriate flags and marks
+fn prepare_fanotify(path: &str) -> nix::Result<Fanotify> {
+    let fanotify = Fanotify::fanotify_init(
+        InitFlags::FAN_CLOEXEC | InitFlags::FAN_CLASS_PRE_CONTENT | InitFlags::FAN_NONBLOCK,
+        OpenFlags::O_RDONLY | OpenFlags::O_LARGEFILE)?;
+    fanotify.add_mark(
+        MarkFlags::FAN_MARK_MOUNT,
+        EventFlags::FAN_CLOSE_WRITE | EventFlags::FAN_OPEN_PERM | EventFlags::FAN_OPEN_EXEC_PERM,
+        libc::AT_FDCWD,
+        path)?;
+    Ok(fanotify)
+}
+
+/// Process all fanotify events as they are available.
+/// 
+/// Loops infinitely as a main loop of every daemon should
+fn loop_until_input_recieved(fanotify: Fanotify, config: Config) -> nix::Result<()> {
+    let mut flush_counter = 0u32;
+    let flush_timeout = Duration::from_secs(config.flush_timeout_sec);
+    let mut handler = EventHandler::with_config(config);
+    let mut poll_fd = [PollFd::new(fanotify.as_raw_fd(), PollFlags::POLLIN)];
+    loop {
+        let poll_num = match poll(&mut poll_fd, -1) {
+            Err(Errno::EINTR) => continue,
+            Err(e) => return Err(e),
+            Ok(val) => val,
+        };
+        if poll_num > 0 {
+            // Fanotify events are available.
+            flush_counter += 1;
+            handler.handle_events(fanotify)?;
+            if flush_counter > FLUSH_PERIOD {
+                handler.flush(flush_timeout);
+                flush_counter = 0;
+            }
+        }
+    }
+}
