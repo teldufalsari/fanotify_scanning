@@ -9,7 +9,7 @@ name = "cryptor"
 path = "src/bin/cryptor.rs"
 
 [[bin]]
-name = "krom"
+name = "kromd"
 path = "src/main.rs"
 ### </EXECUTABLES> ###
 
@@ -23,4 +23,5 @@ daemonize-me = "2.0"
 syslog = "6.0"
 log = "0.4"
 exitcode = "1.1"
+anyhow = "1.0"
 

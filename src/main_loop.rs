@@ -1,13 +1,16 @@
 use std::process;
+use std::path::PathBuf;
 use std::os::unix::prelude::AsRawFd;
+use std::str::FromStr;
 use std::time::Duration;
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::errno::Errno;
-use syslog::{self, Facility, BasicLogger};
+use syslog::{self, Facility, BasicLogger, Formatter3164};
 use exitcode;
 use log::{self, LevelFilter};
 
 use crate::config::Config;
+use crate::daemonizer;
 use crate::fanotify::{Fanotify, OpenFlags, InitFlags, MarkFlags, EventFlags};
 use crate::scanning::event_handler::EventHandler;
 
@@ -16,17 +19,24 @@ const FLUSH_PERIOD: u32 = 64;
 
 
 pub fn start(mount_point: &str) {
+    let pid_file_path = PathBuf::from_str("/run/kromd.pid").unwrap();
+    // Try forking
+    let outcome = daemonizer::daemonize(&pid_file_path);
     // Create syslog logger
-    let formatter = syslog::Formatter3164 {
+    let formatter = Formatter3164 {
         facility: Facility::LOG_DAEMON,
         hostname: None,
-        process: "krom".to_owned(),
+        process: "kromd".to_owned(),
         pid: process::id(),
     };
     let logger = syslog::unix(formatter).unwrap();
     log::set_boxed_logger(Box::new(BasicLogger::new(logger)))
         .map(|()| log::set_max_level(LevelFilter::Trace)).unwrap();
-
+    // Check if fork was successfull
+    if let Err(e) = outcome {
+        log::error!("start failure: {}", e);
+        process::exit(exitcode::OSERR);
+    }
     // Load config
     let config = match Config::load() {
         Ok(c) => c,
@@ -50,7 +60,7 @@ pub fn start(mount_point: &str) {
     };
     // Run main listening loop.
     log::info!("Daemon started; listening for events");
-    if let Err(code) = loop_until_input_recieved(fanotify, config) {
+    if let Err(code) = listen_loop(fanotify, config) {
         log::error!("Fatal error: {}", code.desc());
         process::exit(exitcode::OSERR);
     }
@@ -72,7 +82,7 @@ fn prepare_fanotify(path: &str) -> nix::Result<Fanotify> {
 /// Process all fanotify events as they are available.
 /// 
 /// Loops infinitely as a main loop of every daemon should
-fn loop_until_input_recieved(fanotify: Fanotify, config: Config) -> nix::Result<()> {
+fn listen_loop(fanotify: Fanotify, config: Config) -> nix::Result<()> {
     let mut flush_counter = 0u32;
     let flush_timeout = Duration::from_secs(config.flush_timeout_sec);
     let mut handler = EventHandler::with_config(config);
