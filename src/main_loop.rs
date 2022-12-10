@@ -84,6 +84,11 @@ fn listen_loop(fanotify: Fanotify, config: Config) -> nix::Result<()> {
     let mut flush_counter = 0u32;
     let flush_timeout = Duration::from_secs(config.flush_timeout_sec);
     let mut handler = EventHandler::with_config(config);
+    // set a no-op SIGHHUP handler (we don't have any log files)
+    let sighup_handler = ||  {};
+    if let Err(e) = set_sighup_handler(sighup_handler) {
+        log::error!("failed to set SIGHUP handler: {}", e);
+    }
     let mut poll_fd = [PollFd::new(fanotify.as_raw_fd(), PollFlags::POLLIN)];
     loop {
         let poll_num = match poll(&mut poll_fd, -1) {
@@ -100,5 +105,19 @@ fn listen_loop(fanotify: Fanotify, config: Config) -> nix::Result<()> {
                 flush_counter = 0;
             }
         }
+    }
+}
+
+fn set_sighup_handler<F>(handler: F) -> nix::Result<signal_hook::SigId>
+where
+    F: Fn() + Sync + Send + 'static
+{
+    unsafe {
+        signal_hook::low_level::register(
+            signal_hook::consts::SIGHUP,
+            handler
+        ).map_err(|e| 
+            nix::errno::from_i32(e.raw_os_error().unwrap_or_default())
+        )
     }
 }

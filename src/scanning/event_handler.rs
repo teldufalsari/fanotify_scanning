@@ -25,14 +25,6 @@ struct ProcessIds {
 }
 
 impl EventHandler {
-    // /// Creates a new `EventHandler` instance with default config
-    //pub fn new() -> EventHandler {
-    //    EventHandler {
-    //        proc_table: HashMap::new(), 
-    //        config: Config::default(),
-    //    }
-    //}
-
     /// Creates a new `EventHandler` instance with the given config
     pub fn with_config(config: Config) -> EventHandler {
         EventHandler {
