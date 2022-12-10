@@ -6,7 +6,6 @@ use std::time::Duration;
 use nix::poll::{PollFd, PollFlags, poll};
 use nix::errno::Errno;
 use syslog::{self, Facility, BasicLogger, Formatter3164};
-use exitcode;
 use log::{self, LevelFilter};
 
 use crate::config::Config;
@@ -38,12 +37,11 @@ pub fn start(mount_point: &str) {
         process::exit(exitcode::OSERR);
     }
     // Load config
-    let config = match Config::load() {
-        Ok(c) => c,
-        Err(_) => {
-            log::warn!("Cannot read config file, falling back to defaults");
-            Config::default()
-        }
+    let config = if let Ok(val) = Config::load() {
+        val
+    } else {
+        log::warn!("Cannot read config file, falling back to defaults");
+        Config::default()
     };
 
     // Create a file descriptor for accessing the fanotify API and prepare for polling.

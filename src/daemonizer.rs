@@ -6,9 +6,9 @@ use std::time::Duration;
 use nix::{self, unistd};
 use nix::sys::stat::{self, Mode};
 use nix::fcntl::{self, FcntlArg, OFlag};
-use libc;
 use anyhow::{self, Context};
 
+#[allow(clippy::cast_possible_truncation)]
 fn lockfile(fd: RawFd) -> nix::Result<i32> {
     let fl = libc::flock {
         l_type: libc::F_WRLCK as i16,
@@ -21,6 +21,7 @@ fn lockfile(fd: RawFd) -> nix::Result<i32> {
     fcntl::fcntl(fd, arg)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn close_range(first: u32, last: u32) -> nix::Result<()> {
     nix::errno::Errno::result(
         unsafe {
@@ -29,7 +30,7 @@ fn close_range(first: u32, last: u32) -> nix::Result<()> {
                 first as libc::c_uint,
                 last as libc::c_uint,
                 0
-            ) as i32
+            ) as i32 // this cast is safe because close_range returns i32
         }
     ).map(drop)
 }
@@ -44,6 +45,7 @@ fn create_pid_file(path: &Path) -> anyhow::Result<()> {
     unistd::write(fd, pid_str.as_bytes()).map(drop).with_context(|| "write")
 }
 
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 pub fn daemonize(path_to_pid_file: &Path) -> anyhow::Result<()> {
     let retry_timeout = Duration::from_millis(20);
 
@@ -62,7 +64,7 @@ pub fn daemonize(path_to_pid_file: &Path) -> anyhow::Result<()> {
     unistd::chdir("/")?;
     let max_fd = nix::unistd::sysconf(unistd::SysconfVar::OPEN_MAX)
         .with_context(|| "sysconf")?
-        .unwrap() as u32;
+        .unwrap().clamp(0, i64::from(u32::MAX)) as u32;
     close_range(0, max_fd).with_context(|| "close")?;
 
     let fd0 = fcntl::open("/dev/null", OFlag::O_RDWR, Mode::empty())
