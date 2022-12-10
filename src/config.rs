@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::str::FromStr;
 use std::path::PathBuf;
 use std::fs;
