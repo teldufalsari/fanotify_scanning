@@ -1,5 +1,5 @@
 use std::process;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::os::unix::prelude::AsRawFd;
 use std::str::FromStr;
 use std::time::Duration;
@@ -45,14 +45,19 @@ pub fn start(mount_point: &str) {
     };
 
     // Create a file descriptor for accessing the fanotify API and prepare for polling.
-    let fanotify = match prepare_fanotify(mount_point) {
+    let db_path = if config.enable_allowlist {
+        Some(config.allowlist_path.as_path())
+    } else {
+        None
+    };
+    let fanotify = match prepare_fanotify(mount_point, db_path) {
         Ok(val) => val,
         Err(Errno::EPERM) => {
             log::error!("Fatal error: operation not permitted. Rerun as root.");
             process::exit(exitcode::NOPERM);
         }
         Err(code) => {
-            log::error!("Fatal error: {}", code.desc());
+            log::error!("Fatal error cannot init fanotify: {}", code.desc());
             process::exit(exitcode::OSERR);
         }
     };
@@ -65,7 +70,7 @@ pub fn start(mount_point: &str) {
 }
 
 /// Initialize fanotify instance with appropriate flags and marks
-fn prepare_fanotify(path: &str) -> nix::Result<Fanotify> {
+fn prepare_fanotify(path: &str, db_path: Option<&Path>) -> nix::Result<Fanotify> {
     let fanotify = Fanotify::fanotify_init(
         InitFlags::FAN_CLOEXEC | InitFlags::FAN_CLASS_PRE_CONTENT | InitFlags::FAN_NONBLOCK,
         OpenFlags::O_RDONLY | OpenFlags::O_LARGEFILE)?;
@@ -74,6 +79,14 @@ fn prepare_fanotify(path: &str) -> nix::Result<Fanotify> {
         EventFlags::FAN_CLOSE_WRITE | EventFlags::FAN_OPEN_PERM | EventFlags::FAN_OPEN_EXEC_PERM,
         libc::AT_FDCWD,
         path)?;
+    if let Some(dbp) = db_path {
+        log::warn!("Using database: '{}'", dbp.display());
+        fanotify.add_mark(
+            MarkFlags::FAN_MARK_IGNORED_MASK | MarkFlags::FAN_MARK_IGNORED_SURV_MODIFY,
+            EventFlags::FAN_CLOSE_WRITE | EventFlags::FAN_OPEN_PERM | EventFlags::FAN_OPEN_EXEC_PERM,
+            libc::AT_FDCWD,
+            dbp)?;
+    }
     Ok(fanotify)
 }
 

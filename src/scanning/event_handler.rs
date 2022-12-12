@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::{process, fs, str::FromStr};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::time::{self, SystemTime};
 use nix::unistd::{self, Pid};
 use nix::errno::Errno;
@@ -11,11 +11,13 @@ use crate::fanotify::{self, Fanotify, EventFlags};
 use crate::scanning::proc_stats::ProcStats;
 use crate::scanning::distance::{distance, Distance};
 use crate::config::Config;
+use crate::db_manager::DbManager;
 
 
 pub struct EventHandler {
     proc_table: HashMap<Pid, ProcStats>,
     config: Config,
+    db: DbManager,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -24,12 +26,31 @@ struct ProcessIds {
     parent_id: Pid
 }
 
+enum DbCheckResult {
+    Trusted,
+    MaybeSuspicious,
+    DefSuspicious,
+}
+
 impl EventHandler {
     /// Creates a new `EventHandler` instance with the given config
     pub fn with_config(config: Config) -> EventHandler {
+        let db = if config.enable_allowlist {
+            match DbManager::new(config.allowlist_path.as_path()) {
+                Ok(manager) => manager,
+                Err(e) => {
+                    log::warn!("failed to load database file {} : {}", config.allowlist_path.display(), e);
+                    DbManager::default()
+                }
+            }
+
+        } else {
+            DbManager::default()
+        };
         EventHandler {
             proc_table: HashMap::new(), 
             config,
+            db,
         }
     }
 
@@ -87,6 +108,17 @@ impl EventHandler {
     /// or add a new process to the table.
     /// If the process is suspicious, `kill_process` is called.
     fn handle_modify_event(&mut self, metadata: &fanotify::EventMetadata) -> nix::Result<()> {
+        let maybe_path = get_path_by_pid(metadata.pid);
+        if let Ok(path) = &maybe_path {
+            match self.db_check(path.as_path()) {
+                DbCheckResult::Trusted => return Ok(()),
+                DbCheckResult::DefSuspicious => {
+                    self.kill_process_and_related(metadata.pid);
+                    return Ok(());
+                }
+                DbCheckResult::MaybeSuspicious => {}
+            }
+        }
         // Retirieve write statistics for that process
         let proc_stats = if let Some(val) = self.proc_table.get_mut(&metadata.pid) {
             val
@@ -126,6 +158,11 @@ impl EventHandler {
             }
         }
         if proc_stats.susness > self.config.critical_susp {
+            if let Ok(path) = &maybe_path {
+                if let Err(e) = self.db.add_to_denylist(path.as_path()) {
+                    log::warn!("Cannot access database file: {}", e);
+                }
+            }
             self.kill_process_and_related(metadata.pid);
             self.proc_table.remove(&metadata.pid);
         }
@@ -155,12 +192,11 @@ impl EventHandler {
         Ok(())
     }
 
-        // This function tries to kill all process children, as well as
+    // This function tries to kill all process children, as well as
     // the parent process unless it is init (pid = 0)
     // The function does not return errno, instead it writes error messages
     // to stderr and stdout.
     fn kill_process_and_related(&self, pid: Pid) {
-        log::info!("Found malicious process, PID={pid}");
         let signal = if self.config.use_sigterm {signal::SIGTERM} else {signal::SIGKILL};
         // if true - kill all process group
         // if any processes left - kill them
@@ -184,6 +220,25 @@ impl EventHandler {
         }
         // Kill the process itself
         kill_process(pid, signal);
+    }
+
+    fn db_check(&self, path: &Path) -> DbCheckResult {
+        match self.db.allowlist_contains(path) {
+            Ok(true) => return DbCheckResult::Trusted,
+            Ok(false) => {},
+            Err(e) => {
+                log::warn!("Cannot access database file: {}", e);
+                return DbCheckResult::MaybeSuspicious;
+            }
+        }
+        match self.db.denylist_contains(path) {
+            Ok(true) => DbCheckResult::DefSuspicious,
+            Ok(false) => DbCheckResult::MaybeSuspicious,
+            Err(e) => {
+                log::warn!("Cannot access database file: {}", e);
+                DbCheckResult::MaybeSuspicious
+            }
+        }
     }
 
 }
@@ -264,4 +319,11 @@ fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>, signal: signal::Sign
             kill_descendants(proc.pid, proc_table, signal);
         }
     }
+}
+
+fn get_path_by_pid(pid: Pid) -> std::io::Result<PathBuf> {
+    let mut link_to_exe = PathBuf::from_str("/proc").unwrap();
+    link_to_exe.push(pid.to_string());
+    link_to_exe.push("exe");
+    fs::read_link(link_to_exe)
 }
