@@ -1,5 +1,5 @@
 # Krom
-Proof-of-concept virus scanning utility using fanotify
+Encryptor scanning utility that uses fanotify to detect suspicious activity
 
 ## Build
 Make sure you have Rust toolchain installed. To install the utility run `install.sh` from `etc` directory.
