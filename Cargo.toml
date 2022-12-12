@@ -24,4 +24,5 @@ log = "0.4"
 exitcode = "1.1"
 anyhow = "1.0"
 signal-hook = "0.3"
+sqlite = "0.30"
 
