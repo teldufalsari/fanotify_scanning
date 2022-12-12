@@ -45,6 +45,11 @@ fn create_pid_file(path: &Path) -> anyhow::Result<()> {
     unistd::write(fd, pid_str.as_bytes()).map(drop).with_context(|| "write")
 }
 
+/// Turn the process into a daemon.
+/// 
+/// The forks twice, sets empy mask, closes open file descriptors,
+/// redirects standard input/output into `/dev/null` and creates a pid file.
+/// Root privileges are not dropped.
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 pub fn daemonize(path_to_pid_file: &Path) -> anyhow::Result<()> {
     let retry_timeout = Duration::from_millis(20);
