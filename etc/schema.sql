@@ -2,12 +2,10 @@ CREATE TABLE "allowlist" (
 	"nr"	INTEGER NOT NULL UNIQUE,
 	"path"	TEXT NOT NULL,
 	PRIMARY KEY("nr" AUTOINCREMENT)
-)
+);
 
 CREATE TABLE "denylist" (
 	"nr"	INTEGER NOT NULL UNIQUE,
 	"path"	TEXT NOT NULL,
 	PRIMARY KEY("nr" AUTOINCREMENT)
-)
-
-CREATE TABLE sqlite_sequence(name,seq)
+);
