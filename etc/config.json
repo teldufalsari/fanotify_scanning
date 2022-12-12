@@ -1,0 +1,10 @@
+{
+  "enable_allowlist": true,
+  "allowlist_path": "/etc/krom/proc_data.db",
+  "flush_timeout_sec": 120,
+  "critical_susp": 5,
+  "kill_parent": false,
+  "kill_children": true,
+  "kill_proc_group": false,
+  "use_sigterm": true
+}
