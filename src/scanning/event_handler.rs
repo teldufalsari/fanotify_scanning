@@ -14,18 +14,26 @@ use crate::config::Config;
 use crate::db_manager::DbManager;
 
 
+/// Main appllication struct that collects process stats
+/// and handles `fanotify` events according to these stats
+/// and data from the database.
 pub struct EventHandler {
     proc_table: HashMap<Pid, ProcStats>,
     config: Config,
     db: DbManager,
 }
 
+/// A simple struct that holds process ID
+/// and parent ID together
 #[derive(Debug, Clone, Copy)]
 struct ProcessIds {
     pid: Pid,
     parent_id: Pid
 }
 
+/// This `enum` is the returned by the `database_check`
+/// function to tell if the executable is present in the
+/// allow list, deny list or not present in the database.
 enum DbCheckResult {
     Trusted,
     MaybeSuspicious,
@@ -81,11 +89,11 @@ impl EventHandler {
     }
     
 
-    // Send response to the process that tries to open a file
-    // If process is known ans suspicious, `FAN_DENY` is sent,
-    // `FAN_ALLOW` otherwise.
-    // With the given approach read-only processes don't need
-    // to be held in the process table.
+    /// Send response to the process that tries to open a file
+    /// If process is known ans suspicious, `FAN_DENY` is sent,
+    /// `FAN_ALLOW` otherwise.
+    /// With the given approach read-only processes don't need
+    /// to be held in the process table.
     fn handle_open_perm(
         &self,
         metadata: &fanotify::EventMetadata,
@@ -106,7 +114,7 @@ impl EventHandler {
 
     /// Modify suspiciousness value of the already known process (see source below),
     /// or add a new process to the table.
-    /// If the process is suspicious, `kill_process` is called.
+    /// If the process is suspicious, `kill_process_and_related` is called.
     fn handle_modify_event(&mut self, metadata: &fanotify::EventMetadata) -> nix::Result<()> {
         let maybe_path = get_path_by_pid(metadata.pid);
         if let Ok(path) = &maybe_path {
@@ -169,6 +177,8 @@ impl EventHandler {
         Ok(())
     }
 
+    /// Handle incoming `fanotify` event. For more information, see
+    /// `handle_open_perm` and `handle_modify_event`.
     fn handle_event(
         &mut self,
         metadata: &fanotify::EventMetadata,
@@ -192,10 +202,10 @@ impl EventHandler {
         Ok(())
     }
 
-    // This function tries to kill all process children, as well as
-    // the parent process unless it is init (pid = 0)
-    // The function does not return errno, instead it writes error messages
-    // to stderr and stdout.
+    /// This function tries to kill all process children, as well as
+    /// the parent process unless it is init (pid = 1)
+    /// The function does not return errno, instead it writes error messages
+    /// to stderr and stdout.
     fn kill_process_and_related(&self, pid: Pid) {
         let signal = if self.config.use_sigterm {signal::SIGTERM} else {signal::SIGKILL};
         // if true - kill all process group
@@ -222,6 +232,9 @@ impl EventHandler {
         kill_process(pid, signal);
     }
 
+
+    /// Check if the executable specified by `path`
+    /// is present in the allow list, deny list or not present in the database.
     fn db_check(&self, path: &Path) -> DbCheckResult {
         match self.db.allowlist_contains(path) {
             Ok(true) => return DbCheckResult::Trusted,
@@ -275,7 +288,7 @@ fn get_process_table() -> std::io::Result<Vec<ProcessIds>> {
     Ok(table)
 }
 
-// Read file name from the fanotify event file descriptor
+/// Read file name from the fanotify event file descriptor
 fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
     let mut procfd_path = PathBuf::from_str("/proc/self/fd").unwrap();
     procfd_path.push(fd.to_string());
@@ -285,10 +298,10 @@ fn get_path_by_fd(fd: i32) -> nix::Result<PathBuf> {
     })
 }
 
-// This function tries to kill the process.
-// All open calls from the process will be blocked until it's killed.
-// The function does not return errno, instead it writes error messages
-// to stderr and stdout.
+/// This function tries to kill the process.
+/// All open calls from the process will be blocked until it's killed.
+/// The function does not return errno, instead it writes error messages
+/// to stderr and stdout.
 fn kill_process(pid: Pid, signal: signal::Signal) {
     log::trace!("Killing {pid}...");
     if let Err(code) = signal::kill(pid, signal) {
@@ -296,10 +309,10 @@ fn kill_process(pid: Pid, signal: signal::Signal) {
     }
 }
 
-// This function tries to kill the process group specified by id.
-// All open calls from the processes will be blocked until they are killed.
-// The function does not return errno, instead it writes error messages
-// to stderr and stdout.
+/// This function tries to kill the process group specified by id.
+/// All open calls from the processes will be blocked until they are killed.
+/// The function does not return errno, instead it writes error messages
+/// to stderr and stdout.
 fn kill_process_group(pid: Pid, signal: signal::Signal) {
     log::trace!("Killing process group {pid}...");
     let pg_id =  Pid::from_raw(-pid.as_raw());
@@ -308,10 +321,10 @@ fn kill_process_group(pid: Pid, signal: signal::Signal) {
     }
 }
 
-// This function tries to all processes that are descendants to `pid`.
-// All open calls from the process will be blocked until it's killed.
-// The function does not return errno, instead it writes error messages
-// to stderr and stdout.
+/// This function tries to all processes that are descendants to `pid`.
+/// All open calls from the process will be blocked until it's killed.
+/// The function does not return errno, instead it writes error messages
+/// to stderr and stdout.
 fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>, signal: signal::Signal) {
     for proc in proc_table {
         if proc.parent_id == pid {
@@ -321,6 +334,9 @@ fn kill_descendants(pid: Pid, proc_table: &Vec<ProcessIds>, signal: signal::Sign
     }
 }
 
+
+/// Read get path to the executable of the process specified by
+/// `pid` by accessing the `/proc` pseudofilesystem.
 fn get_path_by_pid(pid: Pid) -> std::io::Result<PathBuf> {
     let mut link_to_exe = PathBuf::from_str("/proc").unwrap();
     link_to_exe.push(pid.to_string());
